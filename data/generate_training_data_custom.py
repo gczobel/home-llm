@@ -1,140 +1,124 @@
 import json
 import random
+from datetime import datetime
+from pathlib import Path
+import csv
+from io import StringIO
 
-# Configuration
-NUM_EXAMPLES = 100  # Number of synthetic examples to generate
-OUTPUT_FILE = "training_data_ha_synthetic.jsonl"
+print("SCRIPT EXECUTION STARTED: generate_training_data_custom.py")
 
-# Predefined lists for generating varied data
-ASSISTANT_RESPONSES_TEMPLATES = [
-    "Sure, I've {} the {}.",
-    "Okay, the {} is now {}.",
-    "Done. The {} has been {}.",
-    "No problem, {} the {} for you.",
-    "Alright, {} the {}."
-]
-
-USER_REQUEST_TEMPLATES = [
-    "Can you turn {} the {} in the {}?",
-    "Please {} the {} in the {}.",
-    "I'd like to {} the {} in the {}.",
-    "Set the {} in the {} to {}.",
-    "{} the {} in the {} for me."
-]
-
-ACTIONS_STATES = {
-    "turn_on": "on",
-    "turn_off": "off",
-    "increase": "increased",
-    "decrease": "decreased",
-    "set": "set" # General set, can be for brightness, temp, etc.
-}
-
-ENTITIES_WITH_PROPERTIES = {
-    "lights": {"actions": ["turn_on", "turn_off", "set"], "properties": ["brightness"]},
-    "fan": {"actions": ["turn_on", "turn_off", "increase", "decrease"], "properties": ["speed"]},
-    "thermostat": {"actions": ["set"], "properties": ["temperature"]},
-    "TV": {"actions": ["turn_on", "turn_off"]},
-    "speakers": {"actions": ["turn_on", "turn_off", "set"], "properties": ["volume"]},
-    "window": {"actions": ["open", "close"]}, # Assuming "open" and "close" map to "on" and "off" states or similar
-    "door": {"actions": ["open", "close"]},
-    "coffee_maker": {"actions": ["turn_on", "turn_off"]},
-    "security_camera": {"actions": ["turn_on", "turn_off"]},
-    "vacuum_cleaner": {"actions": ["turn_on", "turn_off", "start_cleaning", "dock"]}, # More specific actions
-}
-
-LOCATIONS = ["living room", "bedroom", "kitchen", "office", "bathroom", "hallway", "garage", "patio"]
-
-def generate_plausible_user_request():
-    """Generates a more plausible and varied user request."""
-    entity_name = random.choice(list(ENTITIES_WITH_PROPERTIES.keys()))
-    entity_info = ENTITIES_WITH_PROPERTIES[entity_name]
-    action = random.choice(entity_info["actions"])
-    location = random.choice(LOCATIONS)
-    template = random.choice(USER_REQUEST_TEMPLATES)
-
-    # Map action to a state for response generation
-    state = ACTIONS_STATES.get(action, action) # Default to action if no specific state
-
-    # Handle templates with different numbers of placeholders
-    if template.count("{}") == 3: # e.g., "Can you turn {} the {} in the {}?" or "Set the {} in the {} to {}."
-        if action == "set" and "properties" in entity_info:
-            # For "set" actions, pick a property and a value
-            prop = random.choice(entity_info["properties"])
-            value = ""
-            if prop == "brightness":
-                value = f"{random.randint(10, 100)}%"
-            elif prop == "temperature":
-                value = f"{random.randint(18, 25)} degrees"
-            elif prop == "volume":
-                value = f"{random.randint(20, 80)}%"
-            elif prop == "speed":
-                value = random.choice(["low", "medium", "high"])
-            # Adjust user request for "set" actions to be more natural
-            if "Set the {} in the {} to {}." == template: # "Set the [entity] in the [location] to [value/state]."
-                 user_request = template.format(f"{prop} of the {entity_name}", location, value)
-                 # Adjust state for assistant response to reflect property being set
-                 state = f"{prop} to {value}"
-            else: # Other 3-placeholder templates, e.g. "Can you turn {} the {} in the {}?" - this is less ideal for "set"
-                  # Fallback to using action and entity for these if "set" is chosen.
-                  user_request = template.format(action, entity_name, location)
-        else: # For actions other than "set" or if "set" has no specific properties
-            user_request = template.format(action.replace("_", " "), entity_name, location)
-
-    elif template.count("{}") == 2: # e.g. "Please {} the {}." (Location might be omitted or implied)
-        # This template format might not always include location explicitly in the user request
-        # For simplicity, we'll assume the request implies a general context or a previously discussed location.
-        # The generated response, however, can still include a location for clarity.
-        user_request = template.format(action.replace("_", " "), entity_name)
-
-    else: # Fallback for any other template structure (should ideally not happen with defined templates)
-        user_request = f"{action.replace('_', ' ').capitalize()} the {entity_name} in the {location}."
-
-    return user_request, entity_name, location, state
-
-def generate_assistant_response(entity_name, location, state):
-    """Generates an assistant response based on the action's state."""
-    template = random.choice(ASSISTANT_RESPONSES_TEMPLATES)
-    # Adjust state for "open/close" to sound more natural if needed
-    if state in ["open", "close"]:
-        # Example: "Okay, the window is now open." instead of "Okay, the window is now on."
-        # This depends on how ACTIONS_STATES maps these. If "open" maps to "opened", this is fine.
-        # For now, we assume state is correctly representing the final status.
-        pass # State is already "open" or "close"
-
-    # Fill the template
-    if template.count("{}") == 2: # e.g., "Sure, I've {} the {}." or "Okay, the {} is now {}."
-        # Determine if the template expects action/state first or entity first
-        if "I've" in template or "for you" in template or "Alright," in template : # Expects state then entity
-            response = template.format(state, f"{entity_name} in the {location}")
-        else: # Expects entity then state
-            response = template.format(f"{entity_name} in the {location}", state)
-    else: # Fallback for other template structures
-        response = f"Okay, the {entity_name} in the {location} is now {state}."
-    return response
-
-def generate_conversation_data(num_examples):
-    """Generates conversation data."""
-    examples = []
-    for _ in range(num_examples):
-        user_request, entity, location, state_for_response = generate_plausible_user_request()
-        assistant_response = generate_assistant_response(entity, location, state_for_response)
-
-        examples.append({
-            "messages": [
-                {"role": "user", "content": user_request},
-                {"role": "assistant", "content": assistant_response}
-            ]
-        })
-    return examples
-
-if __name__ == "__main__":
-    synthetic_examples = generate_conversation_data(NUM_EXAMPLES)
-
+# Helper function to extract device list from log data's system message
+def extract_devices_csv_from_log_data(log_data_str: str) -> str:
+    print(f"  extract_devices_csv_from_log_data: Called with log_data_str (first 100 chars): {log_data_str[:100]}")
     try:
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            for example in synthetic_examples:
-                f.write(json.dumps(example) + '\n')
-        print(f"Successfully generated and saved {len(synthetic_examples)} synthetic examples to '{OUTPUT_FILE}'.")
-    except IOError as e:
-        print(f"Error writing to file '{OUTPUT_FILE}': {e}")
+        log_data_list = json.loads(log_data_str)
+        for message_idx, message in enumerate(log_data_list):
+            # print(f"    Log message {message_idx}: Role: {message.get('role')}")
+            if message.get("role") == "system":
+                content = message.get("content", "")
+                # print(f"    Found system message. Content (first 100): {content[:100]}")
+                csv_marker = "Available Devices:\n```csv\n"
+                # Handle escaped newlines that might appear in JSON strings
+                csv_marker_escaped = csv_marker.replace("\n", "\\n")
+                
+                start_index = content.find(csv_marker)
+                # print(f"Plain marker search index: {start_index}")
+                if start_index == -1: # Try with escaped newline
+                    start_index = content.find(csv_marker_escaped)
+                    # print(f"Escaped marker search index: {start_index}")
+                    if start_index != -1:
+                         actual_start = start_index + len(csv_marker_escaped)
+                         # print(f"    Found CSV marker (escaped) at index {start_index}.")
+                    else:
+                        # print("    CSV marker not found in system message.")
+                        continue 
+                else:
+                    actual_start = start_index + len(csv_marker)
+                    # print(f"    Found CSV marker (plain) at index {start_index}.")
+                
+                end_index = content.find("```", actual_start)
+                if end_index != -1:
+                    extracted_csv = content[actual_start:end_index].strip().replace("\\n", "\n")
+                    print(f"  extract_devices_csv_from_log_data: Successfully extracted CSV data (first 100 chars): {extracted_csv[:100]}")
+                    return extracted_csv
+        print("  extract_devices_csv_from_log_data: No system message with device CSV found.")
+        return "" 
+    except json.JSONDecodeError as e:
+        print(f"  extract_devices_csv_from_log_data: JSONDecodeError: {e}")
+        return "" 
+    except Exception as e:
+        print(f"  extract_devices_csv_from_log_data: Other error: {e}")
+        return "" 
+
+# Helper function to extract tool calls and final assistant response from log data
+def extract_tool_call_and_response_from_log_data(log_data_str: str):
+    print(f"  extract_tool_call_and_response_from_log_data: Called with log_data_str (first 100 chars): {log_data_str[:100]}")
+    tool_calls = None
+    final_assistant_response = None
+    try:
+        log_data_list = json.loads(log_data_str)
+        
+        assistant_messages = [m for m in log_data_list if m.get("role") == "assistant"]
+        tool_messages = [m for m in log_data_list if m.get("role") == "tool"]
+
+        if not assistant_messages:
+            print("  extract_tool_call_and_response_from_log_data: No assistant messages found.")
+            return None, None
+
+        for i, assistant_msg in enumerate(assistant_messages):
+            # print(f"    Processing assistant_msg {i}: {assistant_msg}")
+            current_tool_calls = assistant_msg.get("tool_calls")
+            current_content = assistant_msg.get("content")
+
+            if current_tool_calls:
+                print(f"    Found tool_calls in assistant message {i}: {current_tool_calls}")
+                tool_calls = current_tool_calls 
+                if current_content: 
+                    print(f"    Content also found in assistant message with tool_calls: {current_content}")
+                    final_assistant_response = current_content # This might be a confirmation like "OK."
+                
+                temp_final_response_after_tool = None
+                for tc_idx, tc in enumerate(tool_calls): 
+                    tool_call_id = tc.get("id")
+                    # print(f"      Processing tool_call {tc_idx} with id: {tool_call_id}")
+                    corresponding_tool_msg = next((tm for tm in tool_messages if tm.get("tool_call_id") == tool_call_id), None)
+                    if corresponding_tool_msg:
+                        # print(f"      Found corresponding tool message: {corresponding_tool_msg}")
+                        tool_msg_index_in_log = -1
+                        try:
+                            # Find index in the original log_data_list to ensure we look *after* it
+                            for log_idx, log_entry in enumerate(log_data_list):
+                                if log_entry.get("role") == "tool" and log_entry.get("tool_call_id") == tool_call_id:
+                                    tool_msg_index_in_log = log_idx
+                                    break
+                        except ValueError: 
+                            # print(f"      ValueError finding index for tool_msg with id {tool_call_id}")
+                            continue # Should not happen if found with next()
+
+                        if tool_msg_index_in_log != -1:
+                            for j in range(tool_msg_index_in_log + 1, len(log_data_list)):
+                                if log_data_list[j].get("role") == "assistant" and log_data_list[j].get("content"):
+                                    temp_final_response_after_tool = log_data_list[j].get("content")
+                                    # print(f"      Found subsequent assistant response: {temp_final_response_after_tool}")
+                                    break 
+                            if temp_final_response_after_tool: 
+                                final_assistant_response = temp_final_response_after_tool
+                        # else:
+                            # print(f"      Tool message with id {tool_call_id} not found in original log_data_list by index.")
+            
+            elif current_content: # This is a text-only response
+                # print(f"    Found text-only assistant message {i}: {current_content}")
+                final_assistant_response = current_content
+                # If this is a simple text response, there should be no active tool_calls from previous iterations.
+                tool_calls = None 
+
+
+    except json.JSONDecodeError as e:
+        print(f"  extract_tool_call_and_response_from_log_data: JSONDecodeError: {e}")
+        pass 
+    except Exception as e: 
+        print(f"  extract_tool_call_and_response_from_log_data: Other error: {e}")
+        pass
+        
+    print(f"  extract_tool_call_and_response_from_log_data: Returning tool_calls: {tool_calls}, final_assistant_response: {final_assistant_response}")
+    return tool_calls, final_assistant_response
